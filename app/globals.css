@@ -24,3 +24,28 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@layer components {
+  /* Removed app-main - inline styles live in page.tsx per user request */
+  .app-main {
+    @apply min-h-screen min-w-0 relative overflow-hidden p-6 md:p-10;
+  }
+
+  .decorative-blobs {
+    @apply pointer-events-none absolute inset-0 overflow-hidden;
+  }
+
+  /* Decorative blob helpers left in CSS previously — no-op now since inline blobs used */
+  .blob-1 {}
+  .blob-2 {}
+  .blob-3 {}
+  .blob-mid-1 {}
+  .blob-mid-2 {}
+  .blob-mid-3 {}
+  .blob-accent-1 {}
+  .blob-accent-2 {}
+
+  .avatar-glow {
+    @apply absolute inset-0 rounded-full w-[280px] h-[280px] md:w-[320px] md:h-[320px] m-auto bg-gradient-to-br from-yellow-200 to-amber-300 blur-2xl transition-all duration-300;
+  }
+}

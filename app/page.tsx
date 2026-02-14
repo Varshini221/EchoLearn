@@ -20,6 +20,10 @@ export default function Home() {
   const [avatarSpeaking, setAvatarSpeaking] = useState(false);
   const voiceCountRef = useRef(0);
   const MAX_VOICES_PER_SESSION = 3;
+  const [notesPack, setNotesPack] = useState<string>("");
+  const [preparing, setPreparing] = useState(false);
+  const shouldAutoRestartRef = useRef(true);
+  const tutorSpeakingRef = useRef(false);
 
   const CHECK_EVERY_MS = 4000;          // how often to evaluate while speaking
   const MIN_NEW_CHARS = 35;             // only check if we have this many new characters
@@ -42,13 +46,20 @@ export default function Home() {
     lastCheckedLenRef.current = 0;
     checksUsedRef.current = 0;
     cooldownUntilRef.current = 0;
-    lastSpokenRef.current = "";
   };
   const speakTutor = async (text: string) => {
+    // ✅ make sure mic is OFF while tutor speaks
+    shouldAutoRestartRef.current = false;
+    stopListening();
+
+    // stop any previous audio
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
+
+    tutorSpeakingRef.current = true;   // ✅ block restarts while speaking
+    setAvatarSpeaking(true);
 
     const res = await fetch("/api/speak", {
       method: "POST",
@@ -57,6 +68,8 @@ export default function Home() {
     });
 
     if (!res.ok) {
+      tutorSpeakingRef.current = false;
+      setAvatarSpeaking(false);
       console.error("Speak failed");
       return;
     }
@@ -68,24 +81,32 @@ export default function Home() {
       const audio = new Audio(url);
       audioRef.current = audio;
 
-      setAvatarSpeaking(true);
-
       const done = () => {
+        tutorSpeakingRef.current = false; // ✅ tutor finished
         setAvatarSpeaking(false);
         URL.revokeObjectURL(url);
+
+        // ✅ now it’s safe to restart the mic (if liveMode)
+        if (liveMode) {
+          shouldAutoRestartRef.current = true;
+          setTimeout(() => startListening(), 250);
+        }
+
         resolve();
       };
 
       audio.onended = done;
       audio.onerror = done;
 
-      audio.play();
+      audio.play().catch(() => done());
     });
   };
 
 
+
   // ---------- Speech Recognition ----------
   const startListening = () => {
+    shouldAutoRestartRef.current = true;
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
@@ -115,6 +136,7 @@ export default function Home() {
 
     recognition.onresult = (event: any) => {
       // Collect final + interim parts
+      if (tutorSpeakingRef.current) return;
       let finalText = "";
       let interimText = "";
 
@@ -137,10 +159,21 @@ export default function Home() {
     };
 
     recognition.onend = () => {
-      // Browser may end after pauses; we treat it as stopped
       recognitionRef.current = null;
       setListening(false);
+
+      if (!liveMode) return;
+      if (!shouldAutoRestartRef.current) return;     // ✅ intentional stop
+      if (tutorSpeakingRef.current) return;          // ✅ tutor is talking
+
+      setTimeout(() => { checkWithAI(true); }, 200);
+
+      setTimeout(() => {
+        if (!recognitionRef.current) startListening();
+      }, 600);
     };
+
+
 
     recognition.onerror = (e: any) => {
       console.log("Speech error:", e);
@@ -152,14 +185,14 @@ export default function Home() {
   };
 
   const stopListening = () => {
+    shouldAutoRestartRef.current = false; // ✅ do not auto-restart from onend
     if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
+      try { recognitionRef.current.stop(); } catch {}
       recognitionRef.current = null;
     }
     setListening(false);
   };
+
 
   // ---------- AI check (call your route) ----------
   const checkWithAI = async (force = false) => {
@@ -199,13 +232,13 @@ export default function Home() {
 
     if (!force && delta < MIN_NEW_CHARS) return;
 
-    // Optional: only check at sentence boundaries (reduces spam)
-    const lastChar = cleanTranscript.slice(-1);
-    const looksLikeBoundary = [".", "?", "!"].includes(lastChar);
-    if (!force && !looksLikeBoundary && delta < MIN_NEW_CHARS * 2) {
-      // If no punctuation, require more new text
-      return;
-    }
+    // // Optional: only check at sentence boundaries (reduces spam)
+    // const lastChar = cleanTranscript.slice(-1);
+    // const looksLikeBoundary = [".", "?", "!"].includes(lastChar);
+    // if (!force && !looksLikeBoundary && delta < MIN_NEW_CHARS * 2) {
+    //   // If no punctuation, require more new text
+    //   return;
+    // }
 
     inFlightRef.current = true;
     setChecking(true);
@@ -219,6 +252,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           notes,
+          notesPack,
           transcript: recentSnippet,
         }),
       });
@@ -230,30 +264,33 @@ export default function Home() {
       checksUsedRef.current += 1;
 
       setResult(data);
+      lastCheckedLenRef.current = newLen;
+      checksUsedRef.current += 1;
+      if (data?.verdict === "correct" || data?.verdict === "partial") {
+        resetForRetry();       // clears transcript + counters
+        return;
+}
+
+
       if (data?.verdict === "incorrect") {
+        shouldAutoRestartRef.current = false;
         stopListening();
 
         cooldownUntilRef.current = Date.now() + COOLDOWN_AFTER_INTERRUPT_MS;
 
         const toSay = (data.feedback ?? "Hold on — that’s not quite right.").trim();
-
         if (toSay && toSay !== lastSpokenRef.current) {
           lastSpokenRef.current = toSay;
 
           if (voiceOn && voiceCountRef.current < MAX_VOICES_PER_SESSION) {
             voiceCountRef.current += 1;
-            await speakTutor(toSay);
+            await speakTutor(toSay); // ✅ restarts mic after speaking ends
           }
 
           resetForRetry();
-
-          // ⭐ AUTO RESTART MIC
-          setTimeout(() => {
-            startListening();
-          }, 400);
-
         }
       }
+
 
     } catch (e) {
       // If anything goes wrong, don't crash UX
@@ -293,48 +330,201 @@ export default function Home() {
     };
   }, [listening, notes, transcript]);
 
-  // ui
-  return (
-    <main className="min-h-screen p-10">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-start">
+  // Presentational: bubble shows tutor feedback when available
+  const bubbleText = result?.feedback ?? "";
 
-        {/* LEFT: AVATAR (big) */}
-        <div className="flex justify-center">
-          <img
-            src="/avatar.png"
-            alt="Tutor avatar"
-            className={`w-[420px] max-w-full transition-transform duration-150 ${
-              avatarSpeaking ? "scale-[1.03]" : "scale-100"
-            }`}
-          />
+  // ui
+  const prepareNotes = async () => {
+    if (!notes.trim()) {
+      setResult({
+        verdict: "partial",
+        interrupt: false,
+        feedback: "Paste lecture notes first, then click Prepare Notes.",
+        question: "What topic are we covering?",
+      });
+      return;
+    }
+
+    setPreparing(true);
+    try {
+      const res = await fetch("/api/summarize-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes }),
+      });
+      const data = await res.json();
+      setNotesPack(data.notesPack ?? "");
+      setResult({
+        verdict: "partial",
+        interrupt: false,
+        feedback: "✅ Notes prepared! Now live checks will be faster + cheaper.",
+        question: "Start speaking when ready.",
+      });
+    } catch (e) {
+      setResult({
+        verdict: "partial",
+        interrupt: false,
+        feedback: "Could not prepare notes. You can still use raw notes, but it may be slower.",
+        question: "Try again, or keep going without Prepare Notes.",
+      });
+    } finally {
+      setPreparing(false);
+    }
+  };
+
+  return (
+    <main className="min-h-screen min-w-0 relative overflow-hidden bg-gradient-to-br from-[#fff2f2] via-[#ffe6de] to-[#fff3e8] p-6 md:p-10">
+      {/* Decorative warm blobs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-20 top-1/4 w-72 h-72 rounded-full bg-red-300/30 blur-3xl" />
+        <div className="absolute right-0 top-1/2 w-64 h-64 rounded-full bg-red-400/25 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 w-56 h-56 rounded-full bg-orange-300/30 blur-3xl" />
+      </div>
+
+      <div className="relative grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-8 md:gap-12 items-center max-w-6xl mx-auto">
+        {/* LEFT: Avatar section (40–50% on desktop) */}
+        <div className="flex flex-col items-center justify-center md:min-h-[420px] order-1">
+          <div className="relative flex justify-center items-center">
+            {/* Pastel glow ring behind avatar */}
+            <div
+              className={`absolute inset-0 rounded-full w-[280px] h-[280px] md:w-[320px] md:h-[320px] m-auto bg-gradient-to-br from-yellow-200/60 to-amber-300/60 blur-2xl transition-all duration-300 ${
+                avatarSpeaking ? "scale-110 opacity-80" : "scale-100 opacity-60"
+              }`}
+            />
+            <img
+              src="/avatar.png"
+              alt="Tutor avatar"
+              className={`relative w-[280px] md:w-[340px] max-w-full transition-all duration-300 ease-out ${
+                avatarSpeaking ? "scale-[1.04]" : "scale-100"
+              }`}
+            />
+          </div>
+
+          {/* Speech bubble when bubbleText exists */}
+          {bubbleText ? (
+            <div className="relative mt-6 w-full max-w-sm mx-auto">
+              <div className="rounded-3xl bg-white/80 backdrop-blur-md border border-white/50 shadow-lg shadow-black/5 px-5 py-4 text-gray-800 text-sm md:text-base">
+                {bubbleText}
+              </div>
+              {/* Bubble tail pointing toward avatar */}
+              <div
+                className="absolute -top-2 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-b-[12px] border-b-white/80"
+                aria-hidden
+              />
+              <span className="absolute -top-1 -right-1 text-sm opacity-70" aria-hidden>✨</span>
+            </div>
+          ) : null}
+
+          {/* Status chips */}
+          <div className="flex flex-wrap justify-center gap-2 mt-6">
+            {listening && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200/80 bg-red-100/90 px-3 py-1.5 text-sm text-red-800 shadow-sm">
+                <span aria-hidden>🎙️</span> Listening
+              </span>
+            )}
+            {checking && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-orange-200/80 bg-orange-100/90 px-3 py-1.5 text-sm text-orange-800 shadow-sm">
+                <span aria-hidden>🧠</span> Thinking
+              </span>
+            )}
+            {avatarSpeaking && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200/80 bg-red-50/90 px-3 py-1.5 text-sm text-red-800 shadow-sm">
+                <span aria-hidden>🦦</span> Tutor speaking
+              </span>
+            )}
+          </div>
         </div>
 
-        {/* RIGHT: APP UI */}
-        <div>
-          <h1 className="text-3xl font-bold">AI Speaking Tutor</h1>
+        {/* RIGHT: Notes, transcript, controls (50–60% on desktop) */}
+        <div className="flex flex-col gap-6 order-2">
+          <h1 className="text-3xl md:text-4xl font-bold text-gray-800 tracking-tight">
+            AI Speaking Tutor
+          </h1>
 
-          <textarea
-            placeholder="Paste lecture notes here..."
-            className="mt-6 w-full h-40 p-3 border rounded"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
+          {/* Tutor Controls (top section) */}
+          <div className="rounded-2xl bg-gradient-to-r from-red-50/60 to-orange-50/60 backdrop-blur-sm border border-red-100/50 shadow-md shadow-black/5 p-4">
+            <div className="flex flex-wrap gap-3 justify-center">
+              <button
+                onClick={() => setVoiceOn((v) => !v)}
+                className={`rounded-full px-5 py-2.5 font-semibold transition-all duration-200 shadow-md shadow-black/5 border ${
+                  voiceOn
+                    ? "bg-red-500/90 text-white border-red-600/80 scale-105"
+                    : "bg-red-400/80 text-white border-red-500/60 hover:brightness-110"
+                }`}
+              >
+                <span aria-hidden>🔊</span> Tutor Voice: {voiceOn ? "ON" : "OFF"}
+              </button>
 
-          <textarea
-            placeholder="Transcript (auto-filled when you speak)..."
-            className="mt-4 w-full h-28 p-3 border rounded"
-            value={transcript}
-            onChange={(e) => setTranscript(e.target.value)}
-          />
+              <button
+                onClick={() => setLiveMode((v) => !v)}
+                className={`rounded-full px-5 py-2.5 font-semibold transition-all duration-200 shadow-md shadow-black/5 border ${
+                  liveMode
+                    ? "bg-orange-500/90 text-white border-orange-600/80 scale-105"
+                    : "bg-orange-400/80 text-white border-orange-500/60 hover:brightness-110"
+                }`}
+              >
+                <span aria-hidden>⚡</span> Live Interrupt: {liveMode ? "ON" : "OFF"}
+              </button>
+            </div>
+          </div>
 
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              onClick={() => setVoiceOn((v) => !v)}
-              className="px-4 py-2 bg-orange-600 text-white rounded"
-            >
-              Tutor Voice: {voiceOn ? "ON" : "OFF"}
-            </button>
+          {/* Lecture Notes card */}
+          <div className="rounded-3xl bg-white/70 backdrop-blur-md border border-white/40 shadow-lg shadow-black/5 p-4 md:p-5">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Lecture Notes
+            </label>
+            <p className="text-xs text-gray-500 mb-2">Paste your notes here so the tutor can check your answers.</p>
+            <textarea
+              placeholder="Paste lecture notes here..."
+              className="w-full h-36 p-4 rounded-2xl border border-gray-200/80 bg-white/60 focus:border-orange-300 focus:ring-2 focus:ring-orange-200/50 focus:outline-none transition-all text-gray-800 placeholder-gray-400"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+            {/* Callout prompting user to Prepare Notes when notes are present but not prepared */}
+            {notes.trim() && !notesPack ? (
+              <div className="mt-3 rounded-lg bg-red-50/90 border border-red-200 p-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-red-700">Prepare notes first</p>
+                    <p className="text-xs text-red-600">Click Prepare Notes to summarize your lecture notes — this makes live checks faster and more accurate.</p>
+                  </div>
+                </div>
+                <div className="flex-shrink-0">
+                  <button
+                    onClick={prepareNotes}
+                    disabled={preparing}
+                    className="px-4 py-2 rounded-full bg-red-500 text-white font-medium shadow-sm disabled:opacity-50"
+                  >
+                    {preparing ? "Preparing..." : "Prepare Notes"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
 
+          {/* Transcript card */}
+          <div className="rounded-3xl bg-white/70 backdrop-blur-md border border-white/40 shadow-lg shadow-black/5 p-4 md:p-5">
+            <div className="flex items-center gap-2 mb-1">
+              <label className="block text-sm font-medium text-gray-700">
+                What you said
+              </label>
+              {listening && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100/90 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mb-2">Auto-filled when you speak, or type here.</p>
+            <textarea
+              placeholder="Transcript (auto-filled when you speak)..."
+              className="w-full h-28 p-4 rounded-2xl border border-gray-200/80 bg-white/60 focus:border-orange-300 focus:ring-2 focus:ring-orange-200/50 focus:outline-none transition-all text-gray-800 placeholder-gray-400"
+              value={transcript}
+              onChange={(e) => setTranscript(e.target.value)}
+            />
+          </div>
+
+          {/* Main Buttons */}
+          <div className="flex flex-wrap gap-3 justify-center">
             <button
               onClick={() => {
                 if (!notes.trim()) {
@@ -349,7 +539,7 @@ export default function Home() {
                 startListening();
               }}
               disabled={listening}
-              className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
+              className="rounded-full px-5 py-2.5 bg-red-400/90 hover:brightness-110 text-white font-medium transition disabled:opacity-50 shadow-md shadow-black/5 border border-red-500/60"
             >
               {listening ? "Listening..." : "Speak Answer"}
             </button>
@@ -357,100 +547,19 @@ export default function Home() {
             <button
               onClick={stopListening}
               disabled={!listening}
-              className="px-4 py-2 bg-gray-700 text-white rounded disabled:opacity-50"
+              className="rounded-full px-5 py-2.5 bg-orange-400/90 hover:brightness-110 text-white font-medium transition disabled:opacity-50 shadow-md shadow-black/5 border border-orange-500/60"
             >
               Stop
             </button>
-
+            {/* Prepare Notes button removed from bottom - callout above provides single action */}
             <button
               onClick={() => checkWithAI(true)}
               disabled={checking || !notes.trim() || !transcript.trim()}
-              className="px-4 py-2 bg-blue-500 text-white rounded disabled:opacity-50"
+              className="rounded-full px-5 py-2.5 bg-orange-500/90 hover:brightness-110 text-white font-medium transition disabled:opacity-50 shadow-md shadow-black/5 border border-orange-600/60"
             >
               {checking ? "Checking..." : "Check Now"}
             </button>
-
-            <button
-              onClick={() => setLiveMode((v) => !v)}
-              className="px-4 py-2 bg-purple-600 text-white rounded"
-            >
-              Live interrupt: {liveMode ? "ON" : "OFF"}
-            </button>
-
-            <button
-              onClick={() => {
-                if (!voiceOn) {
-                  setResult({
-                    verdict: "partial",
-                    interrupt: false,
-                    feedback:
-                      "Turn Tutor Voice ON to test ElevenLabs without burning credits accidentally.",
-                    question: "Ready when you are.",
-                  });
-                  return;
-                }
-                speakTutor(
-                  "Hold on. That is not correct. Photosynthesis happens in chloroplasts."
-                );
-              }}
-              className="px-4 py-2 bg-orange-500 text-white rounded"
-            >
-              Test Tutor Voice
-            </button>
-
-            <button
-              onClick={async () => {
-                stopListening();
-
-                // ✅ always reset transcript + counters for a clean retry
-                resetForRetry();
-
-                setResult({
-                  verdict: "incorrect",
-                  interrupt: true,
-                  feedback: "Hold on — that’s incorrect. Photosynthesis happens in chloroplasts.",
-                  question: "Where does photosynthesis occur?",
-                });
-                setAvatarSpeaking(true);
-                setTimeout(() => setAvatarSpeaking(false), 600);
-
-
-                // ✅ only speak (and animate) if voice is ON
-                if (voiceOn) {
-                  await speakTutor(
-                    "Hold on — that’s incorrect. Photosynthesis happens in chloroplasts."
-                  );
-                }
-
-                // ✅ restart mic (give it a tiny moment)
-                setTimeout(() => {
-                  startListening();
-                }, 500);
-              }}
-              className="px-4 py-2 bg-red-600 text-white rounded"
-            >
-              Simulate Interrupt
-            </button>
-
           </div>
-
-          {result && (
-            <div className="mt-6 p-4 border rounded">
-              <p>
-                <b>Verdict:</b> {result.verdict ?? "unknown"}
-              </p>
-              <p className="mt-2">
-                <b>Interrupt:</b>{" "}
-                {String(result.interrupt ?? (result.verdict === "incorrect"))}
-              </p>
-              <p className="mt-2">
-                <b>Feedback:</b> {result.feedback ?? result.raw ?? ""}
-              </p>
-              <p className="mt-2">
-                <b>Question:</b> {result.question ?? ""}
-              </p>
-            </div>
-          )}
         </div>
       </div>
     </main>

@@ -45,28 +45,40 @@ export async function POST(req: Request) {
       apiKey: process.env.GEMINI_API_KEY,
     });
 
+     // ✅ prefer condensed notesPack if provided, else raw notes
+    const rawNotes = body?.notesPack && String(body.notesPack).trim()
+        ? String(body.notesPack)
+        : String(body.notes);
+
+    // ✅ truncate so you never send huge prompts
+    const safeNotes = rawNotes.slice(0, 3000);
+    const safeTranscript = String(body.transcript).slice(0, 600);
+
     const prompt = `
-You are an AI tutor.
+    You are an AI tutor.
 
-Here are lecture notes:
-${body.notes}
+    Use ONLY the information in the notes to judge the student.
 
-The student said:
-${body.transcript}
+    NOTES (condensed study sheet):
+    ${safeNotes}
 
-Classify the student's answer as one of:
-- "correct" (accurate and complete enough)
-- "partial" (some truth but missing key details from the notes)
-- "incorrect" (wrong or unrelated)
+    STUDENT SAID:
+    ${safeTranscript}
 
-Rules:
-- If verdict is "incorrect", set interrupt=true.
-- If verdict is "partial", set interrupt=false but explain what's missing.
-- If verdict is "correct", set interrupt=false.
+    Classify the student's answer as one of:
+    - "correct" (accurate and complete enough)
+    - "partial" (some truth but missing key details from the notes)
+    - "incorrect" (wrong or unrelated)
 
-Respond ONLY with valid JSON (no markdown, no backticks) in EXACTLY this shape:
-{"verdict":"correct","interrupt":false,"feedback":"text","question":"text"}
-`;
+    Rules:
+    - If you're NOT sure, choose "partial" and ask a clarifying question.
+    - If verdict is "incorrect", set interrupt=true.
+    - If verdict is "partial" or "correct", set interrupt=false.
+
+    Respond ONLY with valid JSON (no markdown, no backticks):
+    {"verdict":"correct","interrupt":false,"feedback":"text","question":"text"}
+    `;
+
 
     const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
