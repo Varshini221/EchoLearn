@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+🎤 EchoLearn
 
-## Getting Started
+EchoLearn is a real-time AI speaking tutor that helps students learn by explaining concepts out loud instead of just rereading notes.
 
-First, run the development server:
+The app listens to student explanations, evaluates them in real time, and gives natural voice feedback to help guide learning.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+🚀 Why EchoLearn?
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Students are often told that the best way to understand something is to explain it. But in reality, most students either explain to friends at the same level or just talk to themselves — which means mistakes can go uncorrected.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+At the same time, studying is becoming more passive with AI tools, where students read answers instead of working through concepts themselves.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+EchoLearn was built to make studying more active, interactive, and closer to explaining material to a real tutor.
 
-## Learn More
+✨ Features
 
-To learn more about Next.js, take a look at the following resources:
+🎙 Real-time speech input
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+🧠 AI explanation evaluation
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+🔊 Natural voice feedback
 
-## Deploy on Vercel
+⚡ Real-time interruption when explanations go off track
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+📜 Live transcript streaming
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+🤖 Conversational tutoring experience
+
+🛠 Tech Stack
+
+Framework & Language
+
+Next.js
+
+React
+
+TypeScript
+
+Node.js
+
+Styling
+
+Tailwind CSS
+
+APIs & AI
+
+Web Speech API (speech recognition)
+
+Google Gemini API (explanation evaluation + feedback)
+
+ElevenLabs API (text-to-speech voice generation)
+
+Tools
+
+Git
+
+GitHub
+
+🧠 How It Works
+
+User pastes notes or study material
+
+User explains concepts out loud
+
+Speech is converted to text in real time
+
+Transcript chunks are evaluated using AI
+
+If explanation is incorrect:
+
+The system interrupts
+
+Explains the mistake
+
+Generates voice feedback
+
+User continues explaining with guidance
